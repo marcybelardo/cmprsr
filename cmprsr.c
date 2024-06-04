@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#define ASCII_SIZE 256
-#define MAX_HEAP_SIZE 256
+#define ASCII_SIZE      256
+#define MAX_HEAP_SIZE   256
+#define MAX_CODE_LENGTH 256
+
+char *lookup_table[MAX_CODE_LENGTH];
 
 struct CharCount {
-	char character;
+	unsigned char character;
 	int count;
 };
 
@@ -28,6 +32,9 @@ void swap(HuffNode **a, HuffNode **b)
 	*b = tmp;
 }
 
+/*
+ *	HUFFMAN TREE IMPLEMENTATIONS
+ */
 HuffNode *create_huff_node(char c, int weight)
 {
 	HuffNode *new = malloc(sizeof(HuffNode));
@@ -119,7 +126,7 @@ HuffNode *extract_min(MinHeap *min_heap)
 	return tmp;
 }
 
-HuffNode *build_huff_tree(struct CharCount **count_arr, int size)
+HuffNode *build_huff_tree(struct CharCount *count_arr, int size)
 {
 	HuffNode *left, *right, *top;
 
@@ -128,7 +135,7 @@ HuffNode *build_huff_tree(struct CharCount **count_arr, int size)
 	for (int i = 0; i < size; i++) {
 		insert_min_heap(
 			min_heap,
-			create_huff_node(count_arr[i]->character, count_arr[i]->count)
+			create_huff_node(count_arr[i].character, count_arr[i].count)
 		);
 	}
 
@@ -146,33 +153,48 @@ HuffNode *build_huff_tree(struct CharCount **count_arr, int size)
 	return extract_min(min_heap);
 }
 
-static int read_from_file(char *filename, int *char_count)
+void free_huff_tree(HuffNode *root)
 {
-	FILE *fp;
-	char ch;
-
-	fp = fopen(filename, "rb");
-	if (fp == NULL) {
-		printf("Error opening file.\n");
-		return 1;
+	if (root) {
+		free_huff_tree(root->l);
+		free_huff_tree(root->r);
+		free(root);
 	}
-
-	while ((ch = fgetc(fp)) != EOF) {
-		char_count[ch]++;
-	}
-
-	fclose(fp);
-
-	return 0;
 }
 
+/*
+ *	ENCODING AND DECODING
+ */
+void encode(HuffNode *root, char *code, int len)
+{
+	if (!root) return;
+
+	// if node is a leaf, store it in the lookup table
+	if (!root->l && !root->r) {
+		code[len] = '\0';
+		lookup_table[(unsigned char)root->c] = strdup(code);
+		return;
+	}
+
+	// append '0' to the code and traverse the left subtree
+	code[len] = '0';
+	encode(root->l, code, len + 1);
+
+	// append '1' to the code and traverse the right subtree
+	code[len] = '1';
+	encode(root->r, code, len + 1);
+}
+
+/*
+ *	CHAR ARRAYS AND SORTING
+ */
 static int create_char_array(int *char_count, struct CharCount *count_arr)
 {
 	int index = 0;
 
 	for (int i = 0; i < ASCII_SIZE; i++) {
 		if (char_count[i] > 0) {
-			count_arr[index].character = (char)i;
+			count_arr[index].character = (unsigned char)i;
 			count_arr[index].count = char_count[i];
 			index++;
 		}
@@ -193,29 +215,71 @@ static void sort_char_count_array(struct CharCount *count_arr, int size)
 	qsort(count_arr, size, sizeof(struct CharCount), compare);
 }
 
+/*
+ *	MAIN
+ */
 int main(int argc, char **argv)
 {
-	char *text_data;
+	char *filename;
+	char *buf;
+	size_t buf_size = 0;
+	size_t buf_capacity = 1;
+
+	buf = (char *)malloc(buf_capacity * sizeof(char));
+	if (!buf) {
+		perror("Failed to allocated memory");
+		return EXIT_FAILURE;
+	}
+	
 	int char_count[ASCII_SIZE] = {0};
 
 	if (argc != 2) {
-		text_data = "ABCBCDCDDEEEDEE\0";
-		for (char *c = text_data; *c != '\0'; c++) {
-			char_count[*c]++;
-		}
+		perror("Incorrect number of arguments");
+		return EXIT_FAILURE;
 	} else {
-		char *filename = argv[1];
-		read_from_file(filename, char_count);
+		filename = argv[1];
 	}
 
-	struct CharCount count_arr[ASCII_SIZE];
-	int valid_counts = create_char_array(char_count, count_arr);
+	FILE *fp;
+	char c;
 
-	sort_char_count_array(count_arr, valid_counts);
-
-	for (int i = 0; i < valid_counts; i++) {
-		printf("Character: '%c' Count: %d\n", count_arr[i].character, count_arr[i].count);
+	fp = fopen(filename, "r");
+	if (fp == NULL) {
+		perror("Failed to open file");
+		return 1;
 	}
+
+	while ((c = fgetc(fp)) != EOF) {
+		char_count[(unsigned char)c]++;
+
+		if (buf_size + 1 >= buf_capacity) {
+			buf_capacity *= 2;
+			buf = (char *)realloc(buf, buf_capacity * sizeof(char));
+			if (!buf) {
+				perror("Failed to reallocate memory");
+				fclose(fp);
+				return 1;
+			}
+		}
+
+		buf[buf_size++] = c;
+	}
+
+	buf[buf_size] = '\0';
+
+	fclose(fp);
+
+	printf("%s\n\n", buf);
+
+	int non_zero = 0;
+	for (int i = 0; i < ASCII_SIZE; i++) {
+		if (char_count[i] > 0) non_zero++;
+	}
+
+	struct CharCount *char_count_arr = (struct CharCount *)malloc(non_zero * sizeof(struct CharCount));
+	int valid_counts = create_char_array(char_count, char_count_arr);
+
+	sort_char_count_array(char_count_arr, valid_counts);
 
 	// HUFFMAN CODING TREE ALGORITHM
 	//
@@ -223,7 +287,50 @@ int main(int argc, char **argv)
 	// 2. Set left node to the lower w val, right node to the higher w val
 	// 3. Re-sort list with the new tree node introduced
 	// 4. Continue with the next two lowest nodes
+	
+	for (int i = 0; i < ASCII_SIZE; i++) {
+		if (char_count_arr[i].count > 0) {
+			printf(
+				"CHAR: %c (0x%02x): COUNT: %d\n",
+				char_count_arr[i].character,
+				char_count_arr[i].character,
+				char_count_arr[i].count
+			);
+		}
+	}
+	
+	HuffNode *root = build_huff_tree(char_count_arr, valid_counts);
 
-	return 0;
+	for (int i = 0; i < MAX_CODE_LENGTH; i++) {
+		lookup_table[i] = NULL;
+	}
+
+	char code[MAX_CODE_LENGTH];
+	encode(root, code, 0);
+
+	FILE *out_fp = fopen("out.cmpr", "wb");
+	if (!out_fp) {
+		perror("Failed to open file.");
+		return EXIT_FAILURE;
+	}
+
+	for (int i = 0; i < strlen(buf); i++) {
+		printf("%s", lookup_table[(unsigned char)buf[i]]);
+
+		char *huff_code = lookup_table[(unsigned char)buf[i]];
+		if (huff_code) fputs(huff_code, out_fp);
+	}
+	printf("\n");
+
+	fclose(out_fp);
+
+	for (int i = 0; i < MAX_CODE_LENGTH; i++) {
+		free(lookup_table[i]);
+	}
+
+	free_huff_tree(root);
+	free(buf);
+
+	return EXIT_SUCCESS;
 }
 
